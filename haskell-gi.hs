@@ -6,13 +6,16 @@ import System.IO (hPutStr, hPutStrLn, stderr)
 
 import qualified Data.Map as M
 
+import Language.Haskell.Exts.Pretty (prettyPrint)
+
+
 --import Graphics.UI.Gtk
 import System.Glib.Initialize
 import System.Glib.GError
 
 import GI.API (loadAPI)
 import GI.Code (Config(..), codeToString, runCodeGen')
-import GI.CodeGen (genModule)
+import GI.CodeGen (genModules)
 
 data Mode = GenerateCode | Dump | Help
   deriving Show
@@ -64,7 +67,8 @@ processAPI options name = do
 
     case optMode options of
         GenerateCode ->
-            putStrLn $ codeToString $ runCodeGen' cfg $ genModule name apis
+--            putStrLn $ codeToString $ runCodeGen' cfg $ genModule name apis
+            putStrLn $ prettyPrint $ genModules name apis
         Dump -> mapM_ print apis
         Help -> putStr showHelp
 

@@ -3,6 +3,8 @@ module GI.Internal.ObjectInfo
     ( objectInfoFields
     , objectInfoMethods
     , objectInfoProperties
+    , objectInfoParent
+    , objectInfoName
     -- , objectInfoSignals
     -- , objectInfoConstants
     -- , objectInfoVFuncs
@@ -40,3 +42,13 @@ objectInfoProperties :: ObjectInfoClass oic => oic -> [PropertyInfo]
 objectInfoProperties oi = unsafePerformIO $
     map (PropertyInfo <$> castPtr) <$>
     getList {# call get_n_properties #} {# call get_property #} (stupidCast oi)
+
+objectInfoParent :: ObjectInfoClass oic => oic -> Maybe ObjectInfo
+objectInfoParent oi = unsafePerformIO $
+    do parent <- {# call get_parent #} (stupidCast oi)
+       if parent == nullPtr then return Nothing
+                            else return (Just $ ObjectInfo $ castPtr parent)
+
+objectInfoName :: ObjectInfoClass oic => oic -> String
+objectInfoName oi = unsafePerformIO $
+    {# call get_type_name #} (stupidCast oi) >>= peekCString

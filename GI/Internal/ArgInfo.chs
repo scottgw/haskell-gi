@@ -23,9 +23,9 @@ import Foreign.C
 
 {# context prefix="g_arg_info" #}
 
-{# enum GIDirection as Direction {underscoreToCase} with prefix="GI" deriving (Show, Eq) #}
-{# enum GIScopeType as Scope {underscoreToCase} with prefix="GI" deriving (Show, Eq) #}
-{# enum GITransfer as Transfer {underscoreToCase} with prefix="GI" deriving (Show, Eq) #}
+{# enum GIDirection as Direction {underscoreToCase} with prefix="GI" deriving (Eq) #}
+{# enum GIScopeType as Scope {underscoreToCase} with prefix="GI" deriving (Eq) #}
+{# enum GITransfer as Transfer {underscoreToCase} with prefix="GI" deriving (Eq) #}
 
 stupidCast :: ArgInfoClass arg => arg -> Ptr ()
 stupidCast arg = castPtr p

@@ -12,47 +12,13 @@ Build-type:          Simple
 Cabal-version:       >=1.2
 Extra-source-files:
 
-Executable haskell-gi
-  main-is: haskell-gi.hs
+Library
   pkgconfig-depends: gobject-introspection-1.0
-  build-depends: base >= 4, containers, glib, mtl
+  build-depends: base >= 4, containers, glib, mtl, haskell-src-exts
   build-tools: hsc2hs
   extensions: ForeignFunctionInterface
-  ghc-options: -Wall -fno-warn-missing-signatures -fwarn-incomplete-patterns -fno-warn-name-shadowing
+  ghc-options: -Wall -fno-warn-missing-signatures -fwarn-incomplete-patterns
   other-modules:
-      System.Glib.Initialize,
-      GI.Internal.Types,
-      GI.Internal.ArgInfo,
-      GI.Internal.BaseInfo,
-      GI.Internal.CallableInfo,
-      GI.Internal.ConstantInfo,
-      GI.Internal.EnumInfo,
-      GI.Internal.FieldInfo,
-      GI.Internal.FunctionInfo,
-      GI.Internal.InterfaceInfo,
-      GI.Internal.ObjectInfo,
-      GI.Internal.ParamFlag,
-      GI.Internal.PropertyInfo,
-      GI.Internal.RegisteredTypeInfo,
-      GI.Internal.StructInfo,
-      GI.Internal.TypeInfo,
-      GI.Internal.Typelib,
-      GI.Internal.UnionInfo,
-      GI.API,
-      GI.Code,
-      GI.Type,
-      GI.Value,
-      GI.Util
-
-Executable test
-  main-is: Test.hs
-  pkgconfig-depends: gobject-introspection-1.0
-  build-depends: base >= 4, containers, glib, HUnit, mtl, test-framework, test-framework-hunit
-  build-tools: hsc2hs
-  extensions: ForeignFunctionInterface
-  ghc-options: -Wall -fno-warn-missing-signatures -fwarn-incomplete-patterns -fno-warn-name-shadowing
-  other-modules:
-      System.Glib.Initialize,
       GI.Internal.Types,
       GI.Internal.ArgInfo,
       GI.Internal.BaseInfo,

@@ -30,7 +30,8 @@ data Value
     | VFloat Float
     | VDouble Double
     | VGType Word32
-    | VUTF8 String
+    | VUTF8 Char
+    | VUTF8Ptr String
     | VFileName String
     deriving (Eq, Show)
 
@@ -49,12 +50,14 @@ valueType (VFloat _)      = TBasicType TFloat
 valueType (VDouble _)     = TBasicType TDouble
 valueType (VGType _)      = TBasicType TGType
 valueType (VUTF8 _)       = TBasicType TUTF8
+valueType (VUTF8Ptr _)    = TPtr (TBasicType TUTF8)
 valueType (VFileName _)   = TBasicType TFileName
 
 fromArgument :: TypeInfo -> Argument -> Value
 fromArgument ti (Argument arg) =
     case typeFromTypeInfo ti of
         TBasicType t -> unsafePerformIO $ basic t
+        TPtr (TBasicType TUTF8) -> unsafePerformIO utf8ptr
         t -> error $ "don't know how to decode argument of type " ++
                 show t
 
@@ -63,6 +66,7 @@ fromArgument ti (Argument arg) =
     basic TInt32 = VInt32 <$> fromIntegral <$> {# get GIArgument->v_int32 #} arg
     -- XXX: Loss of precision?
     basic TDouble = VDouble <$> fromRational <$> toRational <$>  {# get GIArgument->v_double #} arg
-    basic TUTF8 = VUTF8 <$> (peekCString =<< {# get GIArgument->v_string #} arg)
     basic t = error $ "a: implement me: " ++ show t
+
+    utf8ptr = VUTF8Ptr <$> (peekCString =<< {# get GIArgument->v_string #} arg)
 

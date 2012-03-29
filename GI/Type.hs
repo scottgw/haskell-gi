@@ -36,17 +36,46 @@ data BasicType
      | TGType
      | TUTF8
      | TFileName
-    deriving (Eq, Enum, Show)
+    deriving (Eq, Enum)
+
+instance Show BasicType where
+    show TVoid = "void"
+    show TBoolean = "bool"
+    show TInt8 = "int8"
+    show TUInt8 = "uint8"
+    show TInt16 = "int16"
+    show TUInt16 = "uint16"
+    show TInt32 = "int32"
+    show TUInt32 = "uint32"
+    show TInt64 = "int64"
+    show TUInt64 = "uint64"
+    show TFloat = "float"
+    show TDouble = "double"
+    show TUniChar = "unichar"
+    show TGType = "gtype"
+    show TUTF8  = "char"
+    show TFileName = "filename"
 
 data Type
     = TBasicType BasicType
+    | TPtr Type
     | TArray Type
     | TInterface String String
     | TGList Type
     | TGSList Type
     | TGHash Type Type
     | TError
-    deriving (Eq, Show)
+    deriving Eq
+
+instance Show Type where
+   show (TBasicType bt) = show bt
+   show (TPtr t) = show t ++ "*"
+   show (TArray t) = show t ++ "[]"
+   show (TInterface str1 str2) = str1 ++ "." ++ str2
+   show (TGList t) = "glist <" ++ show t ++ ">"
+   show (TGSList t) = "gslist <" ++ show t ++ ">"
+   show (TGHash t1 t2) = "gslist <" ++ show t1 ++ " -> " ++ show t2 ++ ">"
+   show TError = "errorT"
 
 basicTypeFromTypeTag TypeTagVoid = Just TVoid
 basicTypeFromTypeTag TypeTagBoolean = Just TBoolean
@@ -69,7 +98,9 @@ basicTypeFromTypeTag _ = Nothing
 typeFromTypeInfo :: TypeInfo -> Type
 typeFromTypeInfo ti =
     case basicTypeFromTypeTag tag of
-      Just bt -> TBasicType bt
+      Just bt -> if typeInfoIsPointer ti 
+                 then TPtr (TBasicType bt) --  (error ("pointer!: " ++ show bt))
+                 else TBasicType bt
       Nothing -> case tag of
            TypeTagArray -> TArray p1
            -- TypeTagInterface -> TInterface (typeTagToString . typeInfoTag $ ti)

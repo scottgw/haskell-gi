@@ -1,290 +1,215 @@
 
 module GI.CodeGen
-    ( genConstant
-    , genFunction
-    , genCode
-    , genModule
+    ( genConsts
+    , genModules
     ) where
 
-import Control.Applicative ((<$>))
-import Control.Monad (forM_)
-import Control.Monad.Writer (tell)
-import Data.Char (toLower, toUpper)
-import Data.List (intercalate, partition)
-import Data.Typeable (TypeRep)
-import qualified Data.Map as M
+import Data.Char (toUpper, toLower)
+import Data.List (partition)
+
+import qualified Language.Haskell.Exts.Syntax as H
 
 import GI.API
 import GI.Code
 import GI.Type
 import GI.Value
 import GI.Internal.ArgInfo
+import GI.Internal.FunctionInfo
 
-valueStr VVoid         = "()"
-valueStr (VBoolean x)  = show x
-valueStr (VInt8 x)     = show x
-valueStr (VUInt8 x)    = show x
-valueStr (VInt16 x)    = show x
-valueStr (VUInt16 x)   = show x
-valueStr (VInt32 x)    = show x
-valueStr (VUInt32 x)   = show x
-valueStr (VInt64 x)    = show x
-valueStr (VUInt64 x)   = show x
-valueStr (VFloat x)    = show x
-valueStr (VDouble x)   = show x
-valueStr (VGType x)    = show x
-valueStr (VUTF8 x)     = show x
-valueStr (VFileName x) = show x
+valueExpr VVoid         = H.Tuple []
+valueExpr (VBoolean x)  = H.Con (H.UnQual (H.Ident (show x)))
+valueExpr (VInt8 x)     = num x
+valueExpr (VUInt8 x)    = num x
+valueExpr (VInt16 x)    = num x
+valueExpr (VUInt16 x)   = num x
+valueExpr (VInt32 x)    = num x
+valueExpr (VUInt32 x)   = num x
+valueExpr (VInt64 x)    = num x
+valueExpr (VUInt64 x)   = num x
+valueExpr (VFloat x)    = float x
+valueExpr (VDouble x)   = float x
+valueExpr (VGType x)    = num x
+valueExpr (VUTF8 x)     = H.Lit $ H.String [x]
+valueExpr (VUTF8Ptr x)  = H.Lit $ H.String x
+valueExpr (VFileName x) = H.Lit $ H.String x
 
-padTo n s = s ++ replicate (n - length s) ' '
+num :: Integral a => a -> H.Exp
+num = H.Lit . H.Int . fromIntegral
 
-split c s = split' s "" []
-    where split' [] w ws = reverse (reverse w : ws)
-          split' (x:xs) w ws =
-              if x == c then split' xs "" (reverse w:ws)
-                  else split' xs (x:w) ws
+float :: (Read a, Show a, Num a) => a -> H.Exp
+float = H.Lit . H.Frac . read . show
 
-escapeReserved "type" = "type_"
-escapeReserved "in" = "in_"
-escapeReserved "data" = "data_"
-escapeReserved s = s
+l = H.SrcLoc "<unknown>.hs" 0 0
 
-ucFirst (x:xs) = toUpper x : map toLower xs
-ucFirst "" = error "ucFirst: empty string"
+strType :: String -> H.Type
+strType = H.TyCon . H.UnQual . H.Ident
 
-getPrefix :: String -> CodeGen String
-getPrefix ns = do
-    cfg <- config
-    case M.lookup ns (prefixes cfg) of
-        Just p -> return p
-        Nothing -> error $
-            "no prefix defined for namespace " ++ show ns
+typOf TBoolean = strType "Bool"
+typOf TInt8 = strType "Int8"
+typOf TUInt8 = strType "Word8"
+typOf TInt16 = strType "Int16"
+typOf TUInt16 = strType "Word16"
+typOf TInt32 = strType "Int32"
+typOf TUInt32 = strType "Word32"
+typOf TInt64 = strType "Int64"
+typOf TUInt64 = strType "Word64"
+typOf TFloat = strType "Float"
+typOf TDouble = strType "Double"
+typOf TUniChar = strType "Char"
+typOf TGType = strType "GType"
+typOf TUTF8 = strType "Char8"
+typOf TFileName = strType "String"
+typOf TVoid = strType "()"
 
-lowerName (Named ns s _) = do
-    cfg <- config
+hType (TBasicType t) = typOf t
+hType (TPtr (TBasicType TUTF8)) = strType "String"
+hType (TPtr t) = H.TyApp (strType "Ptr") (hType t)
+hType (TArray t) = H.TyList (hType t)
+hType (TInterface str1 str2) = strType (str1 ++ "." ++ str2)
+hType (TGList t) = H.TyList (hType t)
+hType (TGSList t) = H.TyList (hType t)
+hType (TGHash k v) = H.TyFun (hType k) (hType v)
+hType TError = strType "Error"
 
-    case M.lookup s (names cfg) of
-        Just s' -> return s'
-        Nothing -> do
-          let ss = split '_' s
-          ss' <- addPrefix ss
-          return . concat . rename $ ss'
+valueHType = hType . valueType
 
-    where addPrefix ss = do
-              prefix <- getPrefix ns
-              return $ prefix : ss
+-- top-level generation
+genAPI :: API -> [H.Decl]
+genAPI (APIConst nConst) = error "Should not process constants"
+genAPI (APICallback nCallback) = genCallback nCallback
+genAPI (APIEnum nEnum) = genEnum nEnum
+genAPI (APIFlags nFlags) = genFlags nFlags
+genAPI (APIInterface nInterface) = genInterface nInterface
+genAPI (APIObject nObject) = genObject nObject
+genAPI (APIStruct nStruct) = genStruct nStruct
+genAPI (APIFunction func) = genFunction func
+genAPI (APIUnion u) = error $ "unimplemented union " ++ show u
 
-          rename [w] = [map toLower w]
-          rename (w:ws) = map toLower w : map ucFirst' ws
-          rename [] = error "rename: empty list"
+genModules :: String -> [API] -> H.Module
+genModules name apis 
+    = let (consts, others) = partition isConst apis
+          isConst (APIConst _) = True
+          isConst _            = False
+      in modul name "" (genConsts consts ++ concatMap genAPI others)
 
-          ucFirst' "" = "_"
-          ucFirst' x = ucFirst x
+-- uppercase the letter after an underscore
+upperAfterUnder :: String -> String
+upperAfterUnder [] = []
+upperAfterUnder ('_':c:cs) = toUpper c : upperAfterUnder cs
+upperAfterUnder (c:cs) = c:upperAfterUnder cs
 
-upperName (Named ns s _) = do
-    cfg <- config
+upperFirst [] = []
+upperFirst (c:cs) = toUpper c : cs
 
-    case M.lookup s (names cfg) of
-        Just s' -> return s'
-        Nothing -> do
-            let ss = split '_' s
-            ss' <- addPrefix ss
-            return . concatMap ucFirst' $ ss'
+lowerFirst [] = []
+lowerFirst (c:cs) = toLower c : cs
 
-    where addPrefix ss = do
-              prefix <- getPrefix ns
-              return $ prefix : ss
+constCase = upperAfterUnder . map toLower
+valueCase = upperAfterUnder . lowerFirst
+typeCase = upperAfterUnder . upperFirst
 
-          ucFirst' "" = "_"
-          ucFirst' x = ucFirst x
+-- Short-hands for common code generation
+undefH = H.Var $ H.UnQual $ H.Ident "undefined"
+unBangTyH = H.UnBangedTy . hType
+dataDeclH name cons = H.DataDecl l H.DataType [] (H.Ident name) [] cons []
+qConDeclH d = H.QualConDecl l [] [] d
+conDeclH n ts = H.ConDecl (H.Ident n) ts
+recDeclH n fields = H.RecDecl (H.Ident n) fields
+typeSigH n t = H.TypeSig l [H.Ident n] t
+constDeclH n t rhs = 
+    [ typeSigH n t
+    , H.FunBind [
+          H.Match l (H.Ident n) []
+                 Nothing (H.UnGuardedRhs rhs) (H.BDecls [])]
+    ]
 
-haskellType' :: Type -> CodeGen TypeRep
-haskellType' (TInterface ns n) = do
-    prefix <- getPrefix ns
-    return $ haskellType (TInterface "!!!" (ucFirst prefix ++ n))
-haskellType' t = return $ haskellType t
 
-foreignType' :: Type -> CodeGen TypeRep
-foreignType' (TInterface ns n) = do
-    prefix <- getPrefix ns
-    return $ foreignType (TInterface undefined (ucFirst prefix ++ n))
-foreignType' t = return $ foreignType t
+-- Module generation
+emptyModule = modul "Empty" "Empty" []
 
-prime = (++ "'")
+modul :: String -> String -> [H.Decl] -> H.Module
+modul ns name = H.Module l 
+                (H.ModuleName $ ns ++ "." ++ name) 
+                [H.LanguagePragma l [H.Ident "ForeignFunctionInterface"]]
+                Nothing
+                Nothing
+                []
 
-mkLet name value = line $ "let " ++ name ++ " = " ++ value
+-- Generate constants all in one module
+genConsts :: [API] -> [H.Decl]
+genConsts cs = concatMap apiConst cs
 
-mkBind name value = line $ name ++ " <- " ++ value
+apiConst (APIConst nConst) = constDecl nConst
 
-genConstant :: Named Constant -> CodeGen ()
-genConstant n@(Named _ name (Constant value)) = do
-    name' <- lowerName n
-    ht <- haskellType' $ valueType value
-    line $ "-- constant " ++ name
-    line $ name' ++ " :: " ++ show ht
-    line $ name' ++ " = " ++ valueStr value
+constDecl (Named _ str cnst) = 
+    constDeclH (constCase str) (valueHType $ constValue cnst)
+                               (valueExpr $ constValue cnst)
 
-foreignImport :: String -> Callable -> CodeGen ()
-foreignImport symbol callable = tag Import $ do
-    line first
-    indent $ do
-        mapM_ (\a -> line =<< fArgStr a) (args callable)
-        line =<< last
-    where
-    first = "foreign import ccall \"" ++ symbol ++ "\" " ++
-                symbol ++ " :: "
-    fArgStr arg = do
-        ft <- foreignType' $ argType arg
-        let start = show ft ++ " -> "
-        return $ padTo 40 start ++ "-- " ++ argName arg
-    last = show <$> io <$> foreignType' (returnType callable)
 
-hToF :: Arg -> CodeGen ()
-hToF arg = do
-    hType <- haskellType' $ argType arg
-    fType <- foreignType' $ argType arg
-    if hType == fType
-        then mkLet' "id"
-        else hToF' (show hType) (show fType)
+-- Objects
+genObject (Named ns n (Object name mbParent fields methods props))
+    = let objectDecls = concatMap (functionDecl (strType (typeCase n))) methods
+          parentStuff = 
+            case mbParent of
+              Just (Named parentNs parentName _) -> 
+                let noName = parentNs ++ "." ++ parentName -- objName (named no)
+                in [dataDeclH noName []] -- qConDeclH $ conDecl noName]
+              Nothing -> []
+      in parentStuff ++ objectDecls
 
-    where
-    name = escapeReserved $ argName arg
-    mkLet' conv = mkLet (prime name) (conv ++ " " ++ name)
-    mkBind' conv = mkBind (prime name) (conv ++ " `fmap` " ++ name)
-    hToF' "[Char]" "CString" = mkBind' "newCString"
-    hToF' "Word"   "GType"   = mkLet' "fromIntegral"
-    hToF' "Bool"   "CInt"    = mkLet' "fromEnum"
-    hToF' "[Char]" "Ptr CString" = mkBind' "bullshit"
-    hToF' hType fType = error $
-        "don't know how to convert " ++ hType ++ " to " ++ fType
+argTypeH = hType . argType
+argTypesH = map argTypeH . args
 
-genCallable :: String -> Named Callable -> CodeGen ()
-genCallable symbol n@(Named _ _ callable) = do
-    foreignImport symbol callable
-    wrapper
+ioArgs args ret 
+    = foldr H.TyFun (H.TyApp (strType "IO") (hType ret)) args
 
-    where
-    inArgs = filter ((== DirectionIn) . direction) $ args callable
-    outArgs = filter ((== DirectionOut) . direction) $ args callable
-    wrapper = do
-        let argName' = escapeReserved . argName
-        name <- lowerName n
-        tag TypeDecl signature
-        tag Decl $ line $
-            name ++ " " ++
-            intercalate " " (map argName' inArgs) ++
-            " = do"
-        indent $ do
-            convertIn
-            line $ "result <- " ++ symbol ++
-                concatMap (prime . (" " ++) . argName') (args callable)
-            convertOut
-    signature = do
-        name <- lowerName n
-        line $ name ++ " ::"
-        indent $ do
-            mapM_ (\a -> line =<< hArgStr a) inArgs
-            result >>= line
-    convertIn = forM_ (args callable) $ \arg -> do
-        ft <- foreignType' $ argType arg
-        if direction arg == DirectionIn
-            then hToF arg
-            else mkBind (prime $ argName arg) $
-                     "malloc :: " ++
-                     show (io $ ptr ft)
-    -- XXX: Should create ForeignPtrs for pointer results.
-    -- XXX: Check argument transfer.
-    convertOut = do
-        -- XXX: Do reverse conversion here.
-        mkLet "result'" "result"
-        forM_ outArgs $ \arg ->
-            if direction arg == DirectionIn
-                then return ()
-                else do
-                    mkBind (prime $ prime $ argName arg) $
-                        "peek " ++ (prime $ argName arg)
-        let pps = map (prime . prime . argName) outArgs
-        out <- outType
-        case (show out, outArgs) of
-            ("()", []) -> line $ "return ()"
-            ("()", _) -> line $ "return (" ++ intercalate ", " pps ++ ")"
-            (_ , []) -> line $ "return result'"
-            (_ , _) -> line $
-                "return (" ++ intercalate ", " ("result'" : pps) ++ ")"
-    hArgStr arg = do
-        ht <- haskellType' $ argType arg
-        let start = show ht ++ " -> "
-        return $ padTo 40 start ++ "-- " ++ argName arg
-    result = show <$> io <$> outType
-    outType = do
-        hReturnType <- haskellType' $ returnType callable
-        hOutArgTypes <- mapM (haskellType' . argType) outArgs
-        let justType = case outArgs of
-                [] -> hReturnType
-                _ -> "(,)" `con` (hReturnType : hOutArgTypes)
-            maybeType = "Maybe" `con` [justType]
-        return $ if returnMayBeNull callable then maybeType else justType
+callableDecl objType name call 
+    = let t = ioArgs (objType : argTypesH call) (returnType call)
+      in [ffiCall name t]
 
-genFunction :: Function -> CodeGen ()
-genFunction (Function symbol callable) = do
-  line $ "-- function " ++ symbol
-  genCallable symbol callable
+ffiCall name t = 
+    H.ForImp l H.CCall (H.PlaySafe False) name (H.Ident $ valueCase name) t
 
-genStruct :: (Named Struct) -> CodeGen ()
-genStruct n@(Named _ name (Struct _fields)) = do
-  line $ "-- struct " ++ name
-  name' <- upperName n
-  line $ "data " ++ name' ++ " = " ++ name' ++ " (Ptr " ++ name' ++ ")"
-  -- XXX: Generate code for fields.
+constructorDecl name call
+    = let t = ioArgs (argTypesH call) (returnType call)
+      in [ffiCall name t] -- constDeclH (valueCase name) t undefH
 
-genEnum :: Named Enumeration -> CodeGen ()
-genEnum n@(Named _ name (Enumeration _fields)) = do
-  line $ "-- enum " ++ name
-  name' <- upperName n
-  line $ "data " ++ name' ++ " = " ++ name'
-  -- XXX: Generate code for fields.
+functionDecl objType (Function symbol flags (Named ns n callable))
+    | FunctionIsConstructor `elem` flags = constructorDecl symbol callable
+    | FunctionIsMethod `elem` flags = callableDecl objType symbol callable
+    | otherwise = callableDecl objType symbol callable
 
-genFlags :: Named Flags -> CodeGen ()
-genFlags n@(Named _ name (Flags (Enumeration _fields))) = do
-  line $ "-- flags " ++ name
-  name' <- upperName n
-  line $ "data " ++ name' ++ " = " ++ name'
-  -- XXX: Generate code for fields.
 
-genCallback :: Callback -> CodeGen ()
-genCallback (Callback (Named _ name _)) = do
-  line $ "-- callback " ++ name
-  -- XXX
-  line $ "type " ++ name ++ " =  () -> ()"
+genStruct (Named ns n struct)
+    = let nameStr = ns ++ n
+          d = dataDeclH nameStr [structCon nameStr struct]
+      in [d]
 
-genCode :: API -> CodeGen ()
-genCode (APIConst c) = genConstant c >> blank
-genCode (APIFunction f) = genFunction f >> blank
-genCode (APIEnum e) = genEnum e >> blank
-genCode (APIFlags f) = genFlags f >> blank
-genCode (APICallback c) = genCallback c >> blank
-genCode (APIStruct s) = genStruct s >> blank
-genCode a = error $ "can't generate code for " ++ show a
+structCon typeName (Struct fields)
+     = let fieldDecl (Field name typ flags) 
+               = ([H.Ident $ name ++ show flags], unBangTyH typ)
+       in qConDeclH (recDeclH typeName (map fieldDecl fields))
 
-genModule :: String -> [API] -> CodeGen ()
-genModule name apis = do
-    line $ "-- Generated code."
-    blank
-    line $ "{-# LANGUAGE ForeignFunctionInterface #-}"
-    blank
-    -- XXX: Generate export list.
-    line $ "module " ++ name ++ " where"
-    blank
-    line $ "import Data.Int"
-    line $ "import Data.Word"
-    line $ "import Foreign"
-    line $ "import Foreign.C"
-    blank
-    cfg <- config
-    let (imports, rest) = splitImports $ runCodeGen' cfg $ forM_ apis genCode
-    mapM_ (\c -> tell c >> blank) imports
-    mapM_ tell rest
+genFlags (Named ns n (Flags (Enumeration vals)))
+    = [enumDecl n vals]
 
-    where splitImports = partition isImport . codeToList
-          isImport (Tag Import _code) = True
-          isImport _ = False
+genCallback (Callback (Named ns n call))
+    = let cb = constructorDecl n call
+      in cb
+
+enumDecl n vals
+    = let mkConstr (conName, _) = qConDeclH $ conDeclH (typeCase conName) []
+      in dataDeclH n (map mkConstr vals)
+
+
+genInterface (Named ns n (Interface meths consts props))
+    = let methDecls = concatMap (functionDecl (strType $ ns ++ "." ++ n)) meths
+          constDecls = concatMap constDecl consts
+      in methDecls ++ constDecls
+
+
+genEnum (Named ns n (Enumeration vals)) 
+    = [enumDecl n vals]
+
+genFunction (Function symbol flags (Named ns n callable))
+    = constructorDecl symbol callable
