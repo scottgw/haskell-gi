@@ -10,9 +10,12 @@ import Data.Int
 import Data.Word
 import Foreign
 import Foreign.C
+import System.IO.Unsafe as Unsafe
+
 
 import GI.Type
 import GI.Internal.Types
+
 
 #include <girepository.h>
 
@@ -56,8 +59,8 @@ valueType (VFileName _)   = TBasicType TFileName
 fromArgument :: TypeInfo -> Argument -> Value
 fromArgument ti (Argument arg) =
     case typeFromTypeInfo ti of
-        TBasicType t -> unsafePerformIO $ basic t
-        TPtr (TBasicType TUTF8) -> unsafePerformIO utf8ptr
+        TBasicType t -> Unsafe.unsafePerformIO $ basic t
+        TPtr (TBasicType TUTF8) -> Unsafe.unsafePerformIO utf8ptr
         t -> error $ "don't know how to decode argument of type " ++
                 show t
 
