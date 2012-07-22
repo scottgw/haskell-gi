@@ -122,7 +122,7 @@ typeFromTypeInfo ti =
 
 
 con :: String -> [TypeRep] -> TypeRep
-con s xs = mkTyConApp (mkTyCon s) xs
+con s xs = mkTyConApp (mkTyCon3 "GI" "Type" s) xs
 
 io :: TypeRep -> TypeRep
 io t = "IO" `con` [t]
