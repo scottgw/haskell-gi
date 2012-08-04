@@ -55,12 +55,21 @@ recDeclH n fields = H.RecDecl (H.Ident n) fields
 typeSigH n t = H.TypeSig l [H.Ident n] t
 evar = H.Var . unqual
 pvar = H.PVar . H.Ident
+
+
+data HaskDecl = HaskDecl
+                { haskTypeDecl :: H.Decl
+                , haskFuncDecl :: H.Decl
+                }
+
+fromHaskDecl (HaskDecl ty fun) = [ty, fun]
+
 funDefH n t pats rhs = 
-    [ typeSigH n t
-    , H.FunBind [
-          H.Match l (H.Ident n) pats
-                 Nothing (H.UnGuardedRhs rhs) (H.BDecls [])]
-    ]
+    HaskDecl 
+    (typeSigH n t)
+    (H.FunBind [
+        H.Match l (H.Ident n) pats
+        Nothing (H.UnGuardedRhs rhs) (H.BDecls [])])
 
 genH p e = H.Generator l p e
 

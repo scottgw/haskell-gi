@@ -5,6 +5,8 @@ module GI.CodeGen
     , upperFirst
     ) where
 
+import Control.Applicative
+
 import Data.Char (toUpper, toLower, isDigit)
 import Data.List (foldl')
 
@@ -50,68 +52,80 @@ genObject (Named ns n (Object name mbParent fields methods props))
 
 functionDecl className (Function symbol flags (Named ns n callable))
     | FunctionIsConstructor `elem` flags = 
-      constructorDecl className symbol n callable
+      constructorDecl (Just className) symbol n callable
     | FunctionIsMethod `elem` flags = 
-      callableDecl className symbol n callable
-    | otherwise = constructorDecl className symbol n callable
+      callableDecl (Just ns) (Just className) symbol n callable
+    | otherwise = constructorDecl (Just className) symbol n callable
+
+data FFIAndHaskell = FFIAndHaskell 
+                  { ffiDecl :: H.Decl
+                  , haskDecl :: HaskDecl
+                  }
+
+fromFFIAndHaskell (FFIAndHaskell ffi hask) = ffi : fromHaskDecl hask
+
+constructorDecl classNameMb symbolName name callable
+    = callableDecl Nothing classNameMb symbolName name callable
 
 
-constructorDecl className symbolName name callable
-    = let t     = ioCArgs (argCTypes callable) (toTypedEx $ returnType callable)
-          
-          -- maybe the classname is empty if called to generate a target-less
-          -- function
-          name' = if className /= ""
-                  then className ++ "_" ++ name
-                  else name
-      in ffiImport symbolName t : 
-         normalCall Nothing symbolName name' callable
+callableDecl namespaceMb classNameMb symbolName name callable = 
+  FFIAndHaskell cPart haskDecl
+  where 
+    objTypeMb = InterfaceType <$> namespaceMb <*> classNameMb
+    name'     = maybe name (++ "_" ++ name) classNameMb
+    cPart     = cDecl symbolName
+                      (argCTypes callable)
+                      (toTypedEx $ returnType callable)
+    haskDecl = normalCall objTypeMb symbolName name' callable 
 
 
-callableDecl className symbolName name callable
-    = let t = H.TyFun objType 
-                      (ioCArgs (argCTypes callable) 
-                               (toTypedEx $ returnType callable))
-          objType = strType (typeCase className)
-      in ffiImport symbolName t : 
-         normalCall (Just objType) symbolName (className ++ "_" ++ name) callable
-
-
+cDecl symbolName typedArgs retType = ffiImport symbolName type_
+  where
+    type_ = ioCArgs typedArgs retType
+  
 ffiImport name t = 
   H.ForImp l H.CCall (H.PlaySafe False) name (H.Ident $ cName name) t
 
 normalCall objTypeM symbolName name callable = 
-  funDefH (valueCase name) funType argPats (fmapType hReturn retType wrappedRhs)
+  normalCall' cName name typedArgs retType
   where
     -- Arguments and return type using the existential `TypeEx`
+    typedArgs :: [TypedArg HaskTag]
     typedArgs  = toTypedArgs (args callable)
+    
+    typedArgs' :: [TypedArg HaskTag]
+    typedArgs' = maybe id (\t -> (thisArg t :)) objTypeM typedArgs
     retType    = toTypedEx (returnType callable)
     
-    -- The Haskell-facing function type
-    funType    = maybe id H.TyFun objTypeM 
-                          (ioHArgs typedArgs retType)
+    cName = "c_" ++ symbolName
     
-    -- Call to the 
+normalCall' :: String 
+               -> String 
+               -> [TypedArg HaskTag] 
+               -> TypeEx HaskTag 
+               -> HaskDecl
+normalCall' cName name typedArgs retType = 
+  funDefH (valueCase name) funType argPats (fmapType hReturn retType wrappedRhs)
+  where
+    funType    = ioHArgs typedArgs retType
+    
+    -- Call to the function
     wrappedRhs = hArg typedArgs rhs
---    rhs        = foldl (\e a -> H.App e (evar $ safeName $ typedArgName a)) callOnTarget typedArgs
-    rhs        = foldl H.App callOnTarget 
+    rhs        = foldl H.App cExpr 
                    (map (evar . safeName . typedArgName) typedArgs)
     
-    symbolExpr = evar $ "c_" ++ symbolName
-    
-    callOnTarget = maybe symbolExpr 
-                         (const $ H.App symbolExpr (evar "this")) 
-                         objTypeM
-    
-    argPats    = maybe id (const (pvar "this":)) objTypeM 
-                   (map (pvar . safeArgName) (args callable))
+    cExpr      = evar cName
 
--- normalCall' :: String -> String -> [TypeEx tag -> 
+    argPats    = map (pvar . safeName . typedArgName) typedArgs
 
 -- Argument conversion
 data TypedArg tag = TypedArg { typedArgName :: String 
                              , typedArgType :: TypeEx tag
                              }
+                    
+
+thisArg t = TypedArg "this" (TypeEx t)
+
 toTypedArg :: Arg -> TypedArg tag
 toTypedArg arg = TypedArg (safeName $ argName arg) (toTypedEx $ argType arg)
 
@@ -210,12 +224,12 @@ genCallback (Callback (Named ns n call))
   = noImportModule (emptyPtr n) -- constructorDecl "" n (lowerFirst n) call)
       
 
-noTargetFunctionDecl className (Function symbol flags (Named ns n callable))
-  = constructorDecl className symbol n callable
+noTargetFunctionDecl (Function symbol flags (Named ns n callable))
+  = constructorDecl Nothing symbol n callable
 
 -- Interface
 genInterface (Named ns n (Interface meths consts props))
-  = let methDecls = concatMap (functionDecl n) meths
+  = let methDecls = concatMap (fromFFIAndHaskell . functionDecl n) meths
         dataDecls = [ emptyData (n ++ "_")
                     , typeDeclH n (ptrTypeH (strType $ n ++ "_"))
                     ]
@@ -229,7 +243,7 @@ genEnum (Named ns n (Enumeration vals))
                     -- exports, so for now we just use ints.
     
 genFunction f -- (Function symbol flags (Named ns n callable))
-  = noImportModule (noTargetFunctionDecl "" f) -- symbol n callable)
+  = noImportModule (fromFFIAndHaskell $ noTargetFunctionDecl f) 
 
 
 -- | Utility functions.

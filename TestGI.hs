@@ -62,3 +62,14 @@ processAPI name = do
   writeFile (name' ++ ".hs") str
 --  putStrLn str
 
+
+main = mapM_ processAPI [ "GLib"
+                        , "GObject"
+                        , "GModule"
+                        , "Atk"
+                        , "cairo"
+                        , "Gdk"
+                        , "GdkPixbuf"
+                        , "Pango"
+                        , "Xlib"
+                        ]
