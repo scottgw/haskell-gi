@@ -1,8 +1,9 @@
 
 module GI.Internal.StructInfo
     ( structInfoFields
+    , structInfoMethods
     -- XXX: Implement these.
-    -- , structInfoMethods
+    
     -- , structInfoSize
     -- , structInfoAlignment
     -- , structInfoIsGTypeStruct
@@ -30,3 +31,8 @@ structInfoFields :: StructInfoClass sic => sic -> [FieldInfo]
 structInfoFields si = unsafePerformIO $
     map (FieldInfo <$> castPtr) <$>
     getList {# call get_n_fields #} {# call get_field #} (stupidCast si)
+
+structInfoMethods :: StructInfoClass sic => sic -> [FunctionInfo]
+structInfoMethods si = unsafePerformIO $
+    map (FunctionInfo <$> castPtr) <$>
+    getList {# call get_n_methods #} {# call get_method #} (stupidCast si)

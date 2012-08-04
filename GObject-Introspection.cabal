@@ -18,7 +18,7 @@ Library
   build-tools: hsc2hs
   extensions: ForeignFunctionInterface
   ghc-options: -Wall -fno-warn-missing-signatures -fwarn-incomplete-patterns
-  other-modules:
+  exposed-modules:
       GI.Internal.Types,
       GI.Internal.ArgInfo,
       GI.Internal.BaseInfo,
@@ -36,8 +36,10 @@ Library
       GI.Internal.TypeInfo,
       GI.Internal.Typelib,
       GI.Internal.UnionInfo,
-      GI.API,
-      GI.Code,
-      GI.Type,
-      GI.Value,
       GI.Util
+--      GI.API,
+--      GI.Code,
+--      GI.Type,
+--      GI.Value,
+
+ 

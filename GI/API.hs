@@ -15,6 +15,7 @@ module GI.API
     , Object(..)
     , Enumeration(..)
     , Flags (..)
+    , Union (..)
     , loadAPI
     ) where
 
@@ -100,7 +101,7 @@ toFlags ei = let Named ns n x = toEnumeration ei
               in Named ns n (Flags x)
 
 data Arg = Arg {
-    argName :: String,
+    argName ::String,
     argType :: Type,
     direction :: Direction,
     scope :: Scope,
@@ -188,7 +189,7 @@ toProperty pi =
 
 data Field = Field {
     fieldName :: String,
-    fieldType :: Type,
+    fieldType :: Either Type Function,
     fieldFlags :: [FieldInfoFlag] }
 
 instance Show Field where
@@ -198,15 +199,19 @@ instance Show Field where
 toField :: FieldInfo -> Field
 toField fi =
     Field (baseInfoName . baseInfo $ fi)
-        (typeFromTypeInfo $ fieldInfoType fi)
-        (fieldInfoFlags fi)
+          (either (Left . id) (Right . toFunction) (typeFromTypeInfoOrFunc $ fieldInfoType fi))
+          (fieldInfoFlags fi)
 
-data Struct = Struct {
-    fields :: [Field] }
-    deriving Show
+data Struct = 
+  Struct 
+  { fields :: [Field]
+  , structMethods :: [Function]
+  }
+  deriving Show
 
 toStruct :: StructInfo -> Named Struct
 toStruct si = toNamed si $ Struct (map toField $ structInfoFields si)
+                                  (map toFunction $ structInfoMethods si)
 
 -- XXX: Capture alignment and method info.
 

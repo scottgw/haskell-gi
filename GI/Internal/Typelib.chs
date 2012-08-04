@@ -1,5 +1,6 @@
 module GI.Internal.Typelib
   ( getSearchPath
+  , getDependencies
   , getLoadedNamespaces
   , getInfos
   , load
@@ -47,6 +48,18 @@ mapCStrings f ptr = do
           return $ x : xs
 
 peekCStrings = mapCStrings peekCString
+
+getDependencies :: String -> IO [String]
+getDependencies namespace =
+  withCString namespace $ \cstring -> do
+    depsPtr  <- {# call unsafe get_dependencies #} nullRepository cstring
+    if depsPtr == nullPtr
+      then return []
+      else do
+        cstrings <- peekArray0 nullPtr depsPtr
+        strs     <- mapM peekCString cstrings
+        mapM_ free cstrings
+        return strs 
 
 getLoadedNamespaces :: IO [String]
 getLoadedNamespaces = do

@@ -68,7 +68,7 @@ processAPI options name = do
     case optMode options of
         GenerateCode ->
 --            putStrLn $ codeToString $ runCodeGen' cfg $ genModule name apis
-            putStrLn $ prettyPrint $ genModules name apis
+            putStrLn $ prettyPrint $ genModules apis
         Dump -> mapM_ print apis
         Help -> putStr showHelp
 

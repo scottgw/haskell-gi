@@ -3,6 +3,7 @@ module GI.Type
     ( BasicType(..)
     , Type(..)
     , typeFromTypeInfo
+    , typeFromTypeInfoOrFunc
     , io
     , ptr
     , con
@@ -105,10 +106,10 @@ typeFromTypeInfo ti =
            TypeTagArray -> TArray p1
            -- TypeTagInterface -> TInterface (typeTagToString . typeInfoTag $ ti)
            TypeTagInterface ->
-               let bi = baseInfo . typeInfoInterface $ ti
+               let bi = typeInfoInterface ti
                    namespace = baseInfoNamespace bi
                    name = baseInfoName bi
-                in TInterface namespace name
+               in TInterface namespace name
            TypeTagGlist -> TGList p1
            TypeTagGslist -> TGSList p1
            TypeTagGhash -> TGHash p1 p2
@@ -119,6 +120,41 @@ typeFromTypeInfo ti =
     where tag = typeInfoTag ti
           p1 = typeFromTypeInfo $ typeInfoParamType ti 0
           p2 = typeFromTypeInfo $ typeInfoParamType ti 1
+
+
+typeFromTypeInfoOrFunc :: TypeInfo -> Either Type FunctionInfo
+typeFromTypeInfoOrFunc ti =
+    case basicTypeFromTypeTag tag of
+      Just bt -> Left $ if typeInfoIsPointer ti 
+                        then TPtr (TBasicType bt) --  (error ("pointer!: " ++ show bt))
+                        else TBasicType bt
+      Nothing -> case tag of
+           TypeTagArray -> Left $ TArray p1
+           -- TypeTagInterface -> TInterface (typeTagToString . typeInfoTag $ ti)
+           TypeTagInterface ->
+               let bi = typeInfoInterface ti
+                   namespace = baseInfoNamespace bi
+                   name = baseInfoName bi
+               in case baseInfoType bi of
+                 InfoTypeInterface -> Left $ TInterface namespace name
+                 InfoTypeObject -> Left $ TInterface namespace name
+                 InfoTypeEnum -> Left $ TInterface namespace name
+                 InfoTypeStruct -> Left $ TInterface namespace name
+                 InfoTypeFlags -> Left $ TInterface namespace name
+                 InfoTypeUnion -> Left $ TInterface namespace name
+                 InfoTypeCallback -> Right $ fromBaseInfo bi
+                 i -> error $ "typeFromTypeInfo: " ++ show i
+           TypeTagGlist -> Left $ TGList p1
+           TypeTagGslist -> Left $ TGSList p1
+           TypeTagGhash -> Left $ TGHash p1 p2
+           -- XXX: Include more information.
+           TypeTagError -> Left TError
+           _ -> error $ "implement me: " ++ show (tag, fromEnum tag, fromEnum TypeTagArray)
+
+    where tag = typeInfoTag ti
+          p1 = typeFromTypeInfo $ typeInfoParamType ti 0
+          p2 = typeFromTypeInfo $ typeInfoParamType ti 1
+
 
 
 con :: String -> [TypeRep] -> TypeRep

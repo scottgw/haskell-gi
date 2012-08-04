@@ -1,21 +1,238 @@
-
+{-# LANGUAGE GADTs #-}
 module GI.CodeGen
     ( genConsts
     , genModules
+    , upperFirst
     ) where
 
-import Data.Char (toUpper, toLower)
-import Data.List (partition)
+import Data.Char (toUpper, toLower, isDigit)
+import Data.List (foldl')
+
+import qualified Data.Set as Set
+
+import GI.SimpleModule
+import GI.SyntaxBuilder
 
 import qualified Language.Haskell.Exts.Syntax as H
 
 import GI.API
-import GI.Code
-import GI.Type
 import GI.Value
-import GI.Internal.ArgInfo
 import GI.Internal.FunctionInfo
+import GI.TaggedType
 
+-- generate the modules, compressing the constants into one module
+genModules :: [API] -> SimpleModule
+genModules apis = foldl' mergeModules emptyModule modules
+  where  
+    modules = map genAPI apis
+
+-- top-level generation
+genAPI :: API -> SimpleModule
+genAPI (APIConst nConst)         = genConsts nConst
+genAPI (APICallback nCallback)   = genCallback nCallback
+genAPI (APIEnum nEnum)           = genEnum nEnum
+genAPI (APIFlags nFlags)         = genFlags nFlags
+genAPI (APIInterface nInterface) = genInterface nInterface
+genAPI (APIObject nObject)       = genObject nObject
+genAPI (APIStruct nStruct)       = genStruct nStruct
+genAPI (APIFunction func)        = genFunction func
+genAPI (APIUnion u)              = genUnion u
+
+-- Objects
+genObject :: Named Object -> SimpleModule
+genObject (Named ns n (Object name mbParent fields methods props))
+    = let methodDefns = concatMap (functionDecl n) methods
+          dataDecls   = [ emptyData (n ++ "_")
+                        , typeDeclH n (ptrTypeH (strType $ n ++ "_"))
+                        ]
+          allStuff    = dataDecls ++  methodDefns
+      in SimpleModule Set.empty allStuff
+
+functionDecl className (Function symbol flags (Named ns n callable))
+    | FunctionIsConstructor `elem` flags = 
+      constructorDecl className symbol n callable
+    | FunctionIsMethod `elem` flags = 
+      callableDecl className symbol n callable
+    | otherwise = constructorDecl className symbol n callable
+
+
+constructorDecl className symbolName name callable
+    = let t     = ioCArgs (argCTypes callable) (toTypedEx $ returnType callable)
+          
+          -- maybe the classname is empty if called to generate a target-less
+          -- function
+          name' = if className /= ""
+                  then className ++ "_" ++ name
+                  else name
+      in ffiImport symbolName t : 
+         normalCall Nothing symbolName name' callable
+
+
+callableDecl className symbolName name callable
+    = let t = H.TyFun objType 
+                      (ioCArgs (argCTypes callable) 
+                               (toTypedEx $ returnType callable))
+          objType = strType (typeCase className)
+      in ffiImport symbolName t : 
+         normalCall (Just objType) symbolName (className ++ "_" ++ name) callable
+
+
+ffiImport name t = 
+  H.ForImp l H.CCall (H.PlaySafe False) name (H.Ident $ cName name) t
+
+normalCall objTypeM symbolName name callable = 
+  funDefH (valueCase name) funType argPats (fmapType hReturn retType wrappedRhs)
+  where
+    -- Arguments and return type using the existential `TypeEx`
+    typedArgs  = toTypedArgs (args callable)
+    retType    = toTypedEx (returnType callable)
+    
+    -- The Haskell-facing function type
+    funType    = maybe id H.TyFun objTypeM 
+                          (ioHArgs typedArgs retType)
+    
+    -- Call to the 
+    wrappedRhs = hArg typedArgs rhs
+--    rhs        = foldl (\e a -> H.App e (evar $ safeName $ typedArgName a)) callOnTarget typedArgs
+    rhs        = foldl H.App callOnTarget 
+                   (map (evar . safeName . typedArgName) typedArgs)
+    
+    symbolExpr = evar $ "c_" ++ symbolName
+    
+    callOnTarget = maybe symbolExpr 
+                         (const $ H.App symbolExpr (evar "this")) 
+                         objTypeM
+    
+    argPats    = maybe id (const (pvar "this":)) objTypeM 
+                   (map (pvar . safeArgName) (args callable))
+
+-- normalCall' :: String -> String -> [TypeEx tag -> 
+
+-- Argument conversion
+data TypedArg tag = TypedArg { typedArgName :: String 
+                             , typedArgType :: TypeEx tag
+                             }
+toTypedArg :: Arg -> TypedArg tag
+toTypedArg arg = TypedArg (safeName $ argName arg) (toTypedEx $ argType arg)
+
+
+ioHArgs :: [TypedArg HaskTag] -> TypeEx HaskTag -> H.Type
+ioHArgs args ret 
+  = foldr (H.TyFun . typeExHType . typedArgType) 
+          (H.TyApp (strType "IO") (typeExHType ret)) 
+          args
+
+
+hArg :: [TypedArg HaskTag] -> H.Exp -> H.Exp
+hArg [] = id
+hArg (TypedArg name (TypeEx t) : rest) = f . hArg rest
+  where
+    f =
+      case t of
+        FileNameType -> withString name
+        -- ArrayType v -> withString name
+        -- ListType v  -> withString name
+        -- SListType v -> withString name
+        -- I'm not sure how GI will export "char *", likely to use strings
+        -- conveniently, I'll have to intercept that subcase and translate to
+        -- strings.
+        PtrType UTF8Type -> withString name
+        t -> id
+    -- withArray n e =
+    --   H.App (H.App (evar "withArray0") (H.Lit $ H.Int 0) (evar n))
+    --         (H.Lambda l [pvar n] e)
+    withString n e = 
+      H.App (H.App (evar "withCString") (evar n))
+            (H.Lambda l [pvar n] e)
+
+
+typeExHType :: TypeEx HaskTag -> H.Type
+typeExHType = fmapType hType
+
+typeExCType :: TypeEx CTag -> H.Type
+typeExCType = fmapType cType
+
+
+toTypedArgs :: [Arg] -> [TypedArg tag]
+toTypedArgs = map toTypedArg
+
+
+argCTypes :: Callable -> [TypedArg CTag]
+argCTypes = map toTypedArg . args
+
+ioCArgs :: [TypedArg CTag] -> TypeEx CTag -> H.Type
+ioCArgs args ret 
+  = foldr (H.TyFun . typeExCType . typedArgType) 
+          (H.TyApp (strType "IO") (typeExCType ret)) 
+          args
+      
+
+-- Argument name that doesn't conflict with Haskell keywords
+safeArgName = safeName . argName
+
+genConsts cnst = noImportModule (constDecl cnst)
+
+constDecl (Named _ str cnst) = 
+  constDeclH (constCase str) (valueHType $ constValue cnst)
+                             (valueExpr $ constValue cnst)
+
+constDeclH n t rhs = funDefH n t [] rhs
+
+
+-- Structure generation
+genStruct (Named ns n (Struct fields methods))
+     = let fieldDecl (Field name typOrFunc flags) 
+               = ([H.Ident $ safeName name ++ "_" ++ n], typeDecl typOrFunc)
+           typeDecl (Left t) = unBangTyH (fmapType cType (toTypedEx t))
+           typeDecl (Right (Function symb flags namedCallable)) = 
+             let Named ns n callable = namedCallable
+                 typedArgs = toTypedArgs (args callable)
+             in H.UnBangedTy $ ioHArgs typedArgs (toTypedEx $ returnType callable)
+           constConstr = qConDeclH (recDeclH (typeCase n) 
+                                             (map fieldDecl fields)) 
+           d = dataDeclH (typeCase $ safeName n) [constConstr]
+       in noImportModule (emptyPtr $ typeCase $ safeName n) -- [d] ++ concatMap (noTargetFunctionDecl n) methods)
+
+-- Generate unions, so far we'll just do the simple thing and make them
+-- an empty data type
+
+genUnion (Named ns n (Union fields)) = noImportModule (emptyPtr $ typeCase n)
+
+-- Flag generation
+genFlags (Named ns n (Flags (Enumeration vals)))
+  = noImportModule [typeDeclH n (strType "Int")]
+
+-- Callback generation
+-- Callbacks are just types I believe, so this should in the end
+-- become a system to pass Haskell function pointers to
+-- the GLib/Gtk side.
+genCallback (Callback (Named ns n call))
+  = noImportModule (emptyPtr n) -- constructorDecl "" n (lowerFirst n) call)
+      
+
+noTargetFunctionDecl className (Function symbol flags (Named ns n callable))
+  = constructorDecl className symbol n callable
+
+-- Interface
+genInterface (Named ns n (Interface meths consts props))
+  = let methDecls = concatMap (functionDecl n) meths
+        dataDecls = [ emptyData (n ++ "_")
+                    , typeDeclH n (ptrTypeH (strType $ n ++ "_"))
+                    ]
+        constDecls = concatMap constDecl consts
+    in SimpleModule Set.empty (dataDecls ++ methDecls ++ constDecls)
+
+
+genEnum (Named ns n (Enumeration vals)) 
+  = noImportModule [typeDeclH n (strType "Int")]
+                    -- the old type: [enumDecl n vals] won't work in foreign
+                    -- exports, so for now we just use ints.
+    
+genFunction f -- (Function symbol flags (Named ns n callable))
+  = noImportModule (noTargetFunctionDecl "" f) -- symbol n callable)
+
+
+-- | Utility functions.
 valueExpr VVoid         = H.Tuple []
 valueExpr (VBoolean x)  = H.Con (H.UnQual (H.Ident (show x)))
 valueExpr (VInt8 x)     = num x
@@ -33,183 +250,5 @@ valueExpr (VUTF8 x)     = H.Lit $ H.String [x]
 valueExpr (VUTF8Ptr x)  = H.Lit $ H.String x
 valueExpr (VFileName x) = H.Lit $ H.String x
 
-num :: Integral a => a -> H.Exp
-num = H.Lit . H.Int . fromIntegral
-
-float :: (Read a, Show a, Num a) => a -> H.Exp
-float = H.Lit . H.Frac . read . show
-
-l = H.SrcLoc "<unknown>.hs" 0 0
-
-strType :: String -> H.Type
-strType = H.TyCon . H.UnQual . H.Ident
-
-typOf TBoolean = strType "Bool"
-typOf TInt8 = strType "Int8"
-typOf TUInt8 = strType "Word8"
-typOf TInt16 = strType "Int16"
-typOf TUInt16 = strType "Word16"
-typOf TInt32 = strType "Int32"
-typOf TUInt32 = strType "Word32"
-typOf TInt64 = strType "Int64"
-typOf TUInt64 = strType "Word64"
-typOf TFloat = strType "Float"
-typOf TDouble = strType "Double"
-typOf TUniChar = strType "Char"
-typOf TGType = strType "GType"
-typOf TUTF8 = strType "Char8"
-typOf TFileName = strType "String"
-typOf TVoid = strType "()"
-
-hType (TBasicType t) = typOf t
-hType (TPtr (TBasicType TUTF8)) = strType "String"
-hType (TPtr t) = H.TyApp (strType "Ptr") (hType t)
-hType (TArray t) = H.TyList (hType t)
-hType (TInterface str1 str2) = strType (str1 ++ "." ++ str2)
-hType (TGList t) = H.TyList (hType t)
-hType (TGSList t) = H.TyList (hType t)
-hType (TGHash k v) = H.TyFun (hType k) (hType v)
-hType TError = strType "Error"
-
-valueHType = hType . valueType
-
--- top-level generation
-genAPI :: API -> [H.Decl]
-genAPI (APIConst nConst) = error "Should not process constants"
-genAPI (APICallback nCallback) = genCallback nCallback
-genAPI (APIEnum nEnum) = genEnum nEnum
-genAPI (APIFlags nFlags) = genFlags nFlags
-genAPI (APIInterface nInterface) = genInterface nInterface
-genAPI (APIObject nObject) = genObject nObject
-genAPI (APIStruct nStruct) = genStruct nStruct
-genAPI (APIFunction func) = genFunction func
-genAPI (APIUnion u) = error $ "unimplemented union " ++ show u
-
-genModules :: String -> [API] -> H.Module
-genModules name apis 
-    = let (consts, others) = partition isConst apis
-          isConst (APIConst _) = True
-          isConst _            = False
-      in modul name "" (genConsts consts ++ concatMap genAPI others)
-
--- uppercase the letter after an underscore
-upperAfterUnder :: String -> String
-upperAfterUnder [] = []
-upperAfterUnder ('_':c:cs) = toUpper c : upperAfterUnder cs
-upperAfterUnder (c:cs) = c:upperAfterUnder cs
-
-upperFirst [] = []
-upperFirst (c:cs) = toUpper c : cs
-
-lowerFirst [] = []
-lowerFirst (c:cs) = toLower c : cs
-
-constCase = upperAfterUnder . map toLower
-valueCase = upperAfterUnder . lowerFirst
-typeCase = upperAfterUnder . upperFirst
-
--- Short-hands for common code generation
-undefH = H.Var $ H.UnQual $ H.Ident "undefined"
-unBangTyH = H.UnBangedTy . hType
-dataDeclH name cons = H.DataDecl l H.DataType [] (H.Ident name) [] cons []
-qConDeclH d = H.QualConDecl l [] [] d
-conDeclH n ts = H.ConDecl (H.Ident n) ts
-recDeclH n fields = H.RecDecl (H.Ident n) fields
-typeSigH n t = H.TypeSig l [H.Ident n] t
-constDeclH n t rhs = 
-    [ typeSigH n t
-    , H.FunBind [
-          H.Match l (H.Ident n) []
-                 Nothing (H.UnGuardedRhs rhs) (H.BDecls [])]
-    ]
-
-
--- Module generation
-emptyModule = modul "Empty" "Empty" []
-
-modul :: String -> String -> [H.Decl] -> H.Module
-modul ns name = H.Module l 
-                (H.ModuleName $ ns ++ "." ++ name) 
-                [H.LanguagePragma l [H.Ident "ForeignFunctionInterface"]]
-                Nothing
-                Nothing
-                []
-
--- Generate constants all in one module
-genConsts :: [API] -> [H.Decl]
-genConsts cs = concatMap apiConst cs
-
-apiConst (APIConst nConst) = constDecl nConst
-
-constDecl (Named _ str cnst) = 
-    constDeclH (constCase str) (valueHType $ constValue cnst)
-                               (valueExpr $ constValue cnst)
-
-
--- Objects
-genObject (Named ns n (Object name mbParent fields methods props))
-    = let objectDecls = concatMap (functionDecl (strType (typeCase n))) methods
-          parentStuff = 
-            case mbParent of
-              Just (Named parentNs parentName _) -> 
-                let noName = parentNs ++ "." ++ parentName -- objName (named no)
-                in [dataDeclH noName []] -- qConDeclH $ conDecl noName]
-              Nothing -> []
-      in parentStuff ++ objectDecls
-
-argTypeH = hType . argType
-argTypesH = map argTypeH . args
-
-ioArgs args ret 
-    = foldr H.TyFun (H.TyApp (strType "IO") (hType ret)) args
-
-callableDecl objType name call 
-    = let t = ioArgs (objType : argTypesH call) (returnType call)
-      in [ffiCall name t]
-
-ffiCall name t = 
-    H.ForImp l H.CCall (H.PlaySafe False) name (H.Ident $ valueCase name) t
-
-constructorDecl name call
-    = let t = ioArgs (argTypesH call) (returnType call)
-      in [ffiCall name t] -- constDeclH (valueCase name) t undefH
-
-functionDecl objType (Function symbol flags (Named ns n callable))
-    | FunctionIsConstructor `elem` flags = constructorDecl symbol callable
-    | FunctionIsMethod `elem` flags = callableDecl objType symbol callable
-    | otherwise = callableDecl objType symbol callable
-
-
-genStruct (Named ns n struct)
-    = let nameStr = ns ++ n
-          d = dataDeclH nameStr [structCon nameStr struct]
-      in [d]
-
-structCon typeName (Struct fields)
-     = let fieldDecl (Field name typ flags) 
-               = ([H.Ident $ name ++ show flags], unBangTyH typ)
-       in qConDeclH (recDeclH typeName (map fieldDecl fields))
-
-genFlags (Named ns n (Flags (Enumeration vals)))
-    = [enumDecl n vals]
-
-genCallback (Callback (Named ns n call))
-    = let cb = constructorDecl n call
-      in cb
-
-enumDecl n vals
-    = let mkConstr (conName, _) = qConDeclH $ conDeclH (typeCase conName) []
-      in dataDeclH n (map mkConstr vals)
-
-
-genInterface (Named ns n (Interface meths consts props))
-    = let methDecls = concatMap (functionDecl (strType $ ns ++ "." ++ n)) meths
-          constDecls = concatMap constDecl consts
-      in methDecls ++ constDecls
-
-
-genEnum (Named ns n (Enumeration vals)) 
-    = [enumDecl n vals]
-
-genFunction (Function symbol flags (Named ns n callable))
-    = constructorDecl symbol callable
+valueHType :: Value -> H.Type
+valueHType v = fmapType hType (toTypedEx (valueType v))
