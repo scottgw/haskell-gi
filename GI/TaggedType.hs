@@ -1,5 +1,6 @@
 {-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE ExistentialQuantification #-}
 module GI.TaggedType where
@@ -137,6 +138,13 @@ data TaggedType tag type_ where
   HashType :: TaggedType tag k 
                -> TaggedType tag v
                -> TaggedType tag (GHash k v)
+
+
+
+-- We can't derive in the normal way for GADTs but apparently  
+-- StandaloneDeriving will work.
+deriving instance Eq (TaggedType tag type_)
+deriving instance Ord (TaggedType tag type_)
                
 data TypeEx tag = forall t . TypeEx {unTypeEx :: TaggedType tag t}
 

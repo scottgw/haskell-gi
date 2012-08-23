@@ -16,7 +16,7 @@ data ParamFlag = ParamReadable
                | ParamStaticNick
                | ParamStaticBlurb
                | ParamDeprecated
-               deriving (Show,Eq)
+               deriving (Show, Eq, Ord)
 
 instance Enum ParamFlag where
   fromEnum ParamReadable = 1

@@ -19,7 +19,7 @@ import GI.Util (toFlags)
 {# context prefix="g_field_info" #}
 
 {# enum GIFieldInfoFlags as FieldInfoFlag {underscoreToCase} with prefix="GI"
-    deriving (Show, Eq) #}
+    deriving (Show, Eq, Ord) #}
 
 stupidCast :: FieldInfoClass fic => fic -> Ptr ()
 stupidCast fi = castPtr p

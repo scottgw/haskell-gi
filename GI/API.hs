@@ -1,26 +1,33 @@
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators #-}
 
 module GI.API
-    ( API(..)
-    , Named(..)
-    , Constant(..)
-    , Arg(..)
-    , Callable(..)
-    , Function(..)
-    , Signal(..)
-    , Property(..)
-    , Field(..)
-    , Struct(..)
-    , Callback(..)
-    , Interface(..)
-    , Object(..)
-    , Enumeration(..)
-    , Flags (..)
-    , Union (..)
-    , loadAPI
-    ) where
+    -- ( Named(..)
+    -- , Constant(..)
+    -- , Arg(..)
+    -- , Callable(..)
+    -- , Function(..)
+    -- , Signal(..)
+    -- , Property(..)
+    -- , Field(..)
+    -- , Struct(..)
+    -- , Callback(..)
+    -- , Interface(..)
+    -- , Object(..)
+    -- , Enumeration(..)
+    -- , Flags (..)
+    -- , Union (..)
+    -- , loadNamespace
+    -- , NameSpace (..)
+    -- , 
+    -- )
+    where
 
-import Data.List (intercalate)
+import Data.List (intercalate, foldl')
 import Data.Word
+import Data.Label
+import qualified Data.Map as Map
+import Data.Map (Map)
 
 import GI.Internal.Types
 import GI.Internal.ArgInfo
@@ -62,7 +69,13 @@ shortScope s = show s
 shortTrans TransferNothing = ""
 shortTrans t = show t
 
-data Named a = Named { namespace :: String, name :: String, named :: a }
+data Named a = 
+  Named 
+  { nameSpace :: String
+  , nameName :: String
+  , nameNamed :: a 
+  } deriving (Ord, Eq)
+
 
 instance Show a => Show (Named a) where
     show (Named ns n a) = ns ++ "." ++ n ++ " " ++ show a
@@ -75,7 +88,7 @@ toNamed bi x =
 
 data Constant = Constant {
     constValue :: Value }
-    deriving Show
+    deriving (Ord, Eq, Show)
 
 toConstant :: ConstantInfo -> Named Constant
 toConstant ci =
@@ -85,8 +98,8 @@ toConstant ci =
      in toNamed ci $ Constant value
 
 data Enumeration = Enumeration {
-    enumValues :: [(String, Word64)] }
-    deriving Show
+    enumValues :: [(String, Word64)] } 
+                 deriving (Show, Ord, Eq)
 
 toEnumeration :: EnumInfo -> Named Enumeration
 toEnumeration ei = toNamed ei $ Enumeration $
@@ -94,7 +107,7 @@ toEnumeration ei = toNamed ei $ Enumeration $
         (enumInfoValues ei))
 
 data Flags = Flags Enumeration
-    deriving Show
+    deriving (Show, Eq, Ord)
 
 toFlags :: EnumInfo -> Named Flags
 toFlags ei = let Named ns n x = toEnumeration ei
@@ -105,7 +118,7 @@ data Arg = Arg {
     argType :: Type,
     direction :: Direction,
     scope :: Scope,
-    transfer :: Transfer }
+    transfer :: Transfer } deriving (Ord, Eq)
 
 instance Show Arg where
     show (Arg aName aType dir sc trans) =
@@ -125,7 +138,7 @@ data Callable = Callable {
     returnMayBeNull :: Bool,
     returnTransfer :: Transfer,
     returnAttributes :: [(String, String)],
-    args :: [Arg] }
+    callArgs :: [Arg] } deriving (Ord, Eq)
 
 instance Show Callable where
     show (Callable retType mayNull trans attrs argus) =
@@ -150,7 +163,7 @@ toCallable ci =
 data Function = Function {
     fnSymbol :: String,
     fnFlags :: [FunctionInfoFlag],
-    fnCallable :: Named Callable }
+    fnCallable :: Named Callable } deriving (Eq, Ord)
 
 instance Show FunctionInfoFlag where
     show FunctionIsMethod = "method"
@@ -164,7 +177,12 @@ instance Show Function where
 toFunction :: FunctionInfo -> Function
 toFunction fi =
      let ci = fromBaseInfo (baseInfo fi) :: CallableInfo
-      in Function (functionInfoSymbol fi) (functionInfoFlags fi) (toCallable ci)
+     in Function (functionInfoSymbol fi) 
+                 (functionInfoFlags fi) 
+                 (toCallable ci)
+
+toNamedFunction fi = toNamed (baseInfo fi) (toFunction fi)
+
 
 data Signal = Signal
     deriving Show
@@ -175,7 +193,7 @@ toSignal _si = error "fixme"
 data Property = Property {
     propName :: String,
     propType :: Type,
-    propFlags :: [ParamFlag] }
+    propFlags :: [ParamFlag] } deriving (Eq, Ord)
 
 instance Show Property where
     show (Property prName prType prFlags) =
@@ -190,7 +208,7 @@ toProperty pi =
 data Field = Field {
     fieldName :: String,
     fieldType :: Either Type Function,
-    fieldFlags :: [FieldInfoFlag] }
+    fieldFlags :: [FieldInfoFlag] } deriving (Eq, Ord)
 
 instance Show Field where
     show (Field fName fType fFlags) =
@@ -207,7 +225,7 @@ data Struct =
   { fields :: [Field]
   , structMethods :: [Function]
   }
-  deriving Show
+  deriving (Ord, Eq, Show)
 
 toStruct :: StructInfo -> Named Struct
 toStruct si = toNamed si $ Struct (map toField $ structInfoFields si)
@@ -217,7 +235,7 @@ toStruct si = toNamed si $ Struct (map toField $ structInfoFields si)
 
 data Union = Union {
     unionFields :: [Field] }
-    deriving Show
+    deriving (Show, Eq, Ord)
 
 toUnion :: UnionInfo -> Named Union
 toUnion ui =
@@ -230,7 +248,7 @@ data Interface = Interface {
     ifMethods :: [Function],
     ifConstants :: [Named Constant],
     ifProperties :: [Property] }
-    deriving Show
+    deriving (Show, Eq, Ord)
 
 toInterface :: InterfaceInfo -> Named Interface
 toInterface ii =
@@ -245,13 +263,13 @@ data Object = Object {
     objFields :: [Field],
     objMethods :: [Function],
     -- objSignals :: [Signal],
-    objProperties :: [Property] }
+    objProperties :: [Property] } deriving (Eq, Ord)
 
 instance Show Object where
     show (Object name parent fields methods properties) =
         unlines $ 
           [name
-          , maybe "" (\o -> " inherits " ++ objName (named o)) parent
+          , maybe "" (\o -> " inherits " ++ objName (nameNamed o)) parent
           , "{"] ++ 
           map show fields ++
           map show methods ++ 
@@ -268,58 +286,82 @@ toObject oi =
         (map toFunction $ objectInfoMethods oi)
         (map toProperty $ objectInfoProperties oi)
 
-data API
-    = APIConst (Named Constant)
-    | APIFunction Function
-    | APICallback Callback
-    -- XXX: These plus APIUnion should have their gTypes exposed (via a
-    -- binding of GIRegisteredTypeInfo.
-    | APIEnum (Named Enumeration)
-    | APIFlags (Named Flags)
-    | APIInterface (Named Interface)
-    | APIObject (Named Object)
-    | APIStruct (Named Struct)
-    | APIUnion (Named Union)
+type NamedMap a = Map String a
 
-instance Show API where
-    show (APIConst c) = show c
-    show (APIFunction f) = show f
-    show (APICallback cb) = show cb
-    show (APIEnum e) = show e
-    show (APIFlags f) = show f
-    show (APIInterface i) = show i
-    show (APIObject o) = show o
-    show (APIStruct s) = show s
-    show (APIUnion u) = show u
+data Namespace = 
+  Namespace
+  { _nsName   :: String
+  , _nsObject :: NamedMap Object
+  , _nsEnum   :: NamedMap Enumeration
+  , _nsConst  :: NamedMap Constant
+  , _nsUnion  :: NamedMap Union
+  , _nsStruct :: NamedMap Struct
+  , _nsFlags  :: NamedMap Flags
+  , _nsFunc   :: NamedMap Function
+  , _nsCB     :: NamedMap Callable
+  , _nsIFace  :: NamedMap Interface
+  }
 
-toAPI :: BaseInfoClass bi => bi -> API
-toAPI i = toInfo' (baseInfoType i) (baseInfo i)
-    where
+mkNamespace name = 
+  Namespace 
+  { _nsName   = name
+  , _nsObject = Map.empty
+  , _nsEnum   = Map.empty
+  , _nsConst  = Map.empty
+  , _nsUnion  = Map.empty
+  , _nsStruct = Map.empty
+  , _nsFlags  = Map.empty
+  , _nsFunc   = Map.empty
+  , _nsCB     = Map.empty
+  , _nsIFace  = Map.empty
+  }
 
-    toInfo' InfoTypeConstant =
-        APIConst . toConstant . fromBaseInfo
-    toInfo' InfoTypeEnum =
-        APIEnum . toEnumeration . fromBaseInfo
-    toInfo' InfoTypeFlags =
-        APIFlags . toFlags . fromBaseInfo
-    toInfo' InfoTypeFunction =
-        APIFunction . toFunction . fromBaseInfo
-    toInfo' InfoTypeCallback =
-        APICallback . Callback . toCallable . fromBaseInfo
-    toInfo' InfoTypeStruct =
-        APIStruct . toStruct . fromBaseInfo
-    toInfo' InfoTypeUnion =
-        APIUnion . toUnion . fromBaseInfo
-    toInfo' InfoTypeObject =
-        APIObject . toObject . fromBaseInfo
-    toInfo' InfoTypeInterface =
-        APIInterface . toInterface . fromBaseInfo
+mkLabels [''Namespace]
+
+class HasName a where
+  nameOf :: a -> String
+
+insertNamed :: Ord a => Named a -> NamedMap a -> NamedMap a
+insertNamed x = Map.insert (nameName x) (nameNamed x)
+
+nsInsert :: Ord a 
+            => (Namespace :-> NamedMap a) 
+            -> Named a 
+            -> Namespace 
+            -> Namespace
+nsInsert sel x ns = modify sel (insertNamed x) ns
+
+nsAddObject = nsInsert nsObject
+nsAddEnum   = nsInsert nsEnum
+nsAddConst  = nsInsert nsConst
+nsAddUnion  = nsInsert nsUnion
+nsAddStruct = nsInsert nsStruct
+nsAddFlags  = nsInsert nsFlags
+nsAddFunc   = nsInsert nsFunc
+nsAddCB     = nsInsert nsCB
+nsAddIFace  = nsInsert nsIFace
+
+toNamespace :: BaseInfoClass bi => bi -> Namespace -> Namespace
+toNamespace i = toInfo' (baseInfoType i) (baseInfo i)
+  where
+    toInfo' InfoTypeConstant = nsAddConst  . toConstant      . fromBaseInfo
+    toInfo' InfoTypeEnum     = nsAddEnum   . toEnumeration   . fromBaseInfo
+    toInfo' InfoTypeFlags    = nsAddFlags  . toFlags         . fromBaseInfo
+    toInfo' InfoTypeFunction = nsAddFunc   . toNamedFunction . fromBaseInfo
+    toInfo' InfoTypeCallback = nsAddCB     . toCallable      . fromBaseInfo
+    toInfo' InfoTypeStruct   = nsAddStruct . toStruct        . fromBaseInfo
+    toInfo' InfoTypeUnion    = nsAddUnion  . toUnion         . fromBaseInfo
+    toInfo' InfoTypeObject   = nsAddObject . toObject        . fromBaseInfo
+    toInfo' InfoTypeInterface = nsAddIFace . toInterface     . fromBaseInfo
     toInfo' it = error $ "not expecting a " ++ show it
 
-loadAPI :: String -> IO [API]
-loadAPI name = do
-    lib <- load name Nothing
+
+loadNamespace :: String -> Maybe String -> IO Namespace
+loadNamespace name versionMb = do
+    lib <- load name versionMb
     infos <- getInfos lib
     -- XXX: Work out what to do with boxed types.
-    return $ map toAPI $ filter (\i -> baseInfoType i /= InfoTypeBoxed) infos
-
+    let
+      infos' = filter (\i -> baseInfoType i /= InfoTypeBoxed) infos
+      ns = foldl' (flip toNamespace) (mkNamespace name) infos'
+    return ns

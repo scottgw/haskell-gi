@@ -36,7 +36,7 @@ data Value
     | VUTF8 Char
     | VUTF8Ptr String
     | VFileName String
-    deriving (Eq, Show)
+    deriving (Eq, Ord, Show)
 
 valueType :: Value -> Type
 valueType VVoid           = TBasicType TVoid

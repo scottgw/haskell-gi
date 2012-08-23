@@ -37,7 +37,7 @@ data BasicType
      | TGType
      | TUTF8
      | TFileName
-    deriving (Eq, Enum)
+    deriving (Eq, Enum, Ord)
 
 instance Show BasicType where
     show TVoid = "void"
@@ -66,7 +66,7 @@ data Type
     | TGSList Type
     | TGHash Type Type
     | TError
-    deriving Eq
+    deriving (Eq, Ord)
 
 instance Show Type where
    show (TBasicType bt) = show bt

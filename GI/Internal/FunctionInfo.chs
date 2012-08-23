@@ -18,7 +18,7 @@ import Foreign.C
 
 {# context prefix="g_function_info" #}
 
-{# enum GIFunctionInfoFlags as FunctionInfoFlag {underscoreToCase} with prefix="GI" deriving (Eq) #}
+{# enum GIFunctionInfoFlags as FunctionInfoFlag {underscoreToCase} with prefix="GI" deriving (Eq, Ord) #}
 
 -- Because all the C types are synonyms, c2hs picks the last one...
 stupidCast :: FunctionInfoClass fic => fic -> Ptr ()
