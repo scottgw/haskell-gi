@@ -1,14 +1,8 @@
 module Main where
 
-import Control.Applicative
-
-import Data.Char (toUpper)
-import qualified Data.Set as Set
-
 import Language.Haskell.Exts.Pretty (prettyPrint)
 
 import System.Glib.GType
-
 
 import GI.API --  (loadAPI)
 import GI.Internal.Typelib

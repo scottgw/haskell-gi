@@ -5,19 +5,12 @@
 {-# LANGUAGE QuasiQuotes #-}
 module GI.Generation.Common where
 
-import Control.Applicative
 import Control.Category
 
-import Data.Char (toUpper, toLower, isDigit)
-import Data.List (foldl')
 import Data.Label
 import Data.Maybe
 
-import Debug.Trace
-
 import qualified Data.Map as Map
-import qualified Data.Set as Set
-
 
 import Prelude hiding ((.), id)
 
@@ -28,8 +21,6 @@ import qualified Language.Haskell.Exts.Syntax as H
 import Language.Haskell.Exts.QQ
 
 import GI.API
-import GI.Value
-import GI.Internal.FunctionInfo
 import GI.TaggedType
 
 callableDecl :: [Namespace]
